@@ -1,9 +1,11 @@
-"""ChromaDB persistent vector store helpers."""
+"""ChromaDB persistent vector store helpers (Windows-safe reset)."""
 
 from __future__ import annotations
 
+import gc
 import logging
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,17 +20,40 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "rag_documents"
 
+# Single live client — avoids opening many SQLite locks under Streamlit.
+_store: Chroma | None = None
+_store_path: str | None = None
+
+
+def _release_store() -> None:
+    """Drop the cached Chroma client so Windows can unlock SQLite files."""
+    global _store, _store_path
+    _store = None
+    _store_path = None
+    gc.collect()
+
 
 def get_vectorstore(persist_directory: Path | None = None) -> Chroma:
-    """Open (or create) the persistent Chroma vector store."""
+    """Open (or reuse) the persistent Chroma vector store."""
+    global _store, _store_path
+
     path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
     path.mkdir(parents=True, exist_ok=True)
+    path_str = str(path.resolve())
 
-    return Chroma(
+    if _store is not None and _store_path == path_str:
+        return _store
+
+    if _store is not None:
+        _release_store()
+
+    _store = Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=get_embeddings(),
-        persist_directory=str(path),
+        persist_directory=path_str,
     )
+    _store_path = path_str
+    return _store
 
 
 def get_retriever(
@@ -43,7 +68,12 @@ def get_retriever(
 def get_chunk_count(persist_directory: Path | None = None) -> int:
     """Return the number of indexed chunks, or 0 if the store is empty/missing."""
     path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
-    if not path.exists() or not any(path.iterdir()):
+    if not path.exists():
+        return 0
+    try:
+        if not any(path.iterdir()):
+            return 0
+    except OSError:
         return 0
 
     try:
@@ -54,13 +84,70 @@ def get_chunk_count(persist_directory: Path | None = None) -> int:
         return 0
 
 
+def _clear_collection_contents(store: Chroma) -> None:
+    """Remove every document without deleting chroma.sqlite3 on disk."""
+    try:
+        data = store.get()
+        ids = list(data.get("ids") or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("store.get() failed while clearing: %s", exc)
+        ids = []
+
+    if ids:
+        batch_size = 200
+        for start in range(0, len(ids), batch_size):
+            store.delete(ids=ids[start : start + batch_size])
+        return
+
+    # Empty or unreadable — recreate collection handle
+    try:
+        store.delete_collection()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("delete_collection failed: %s", exc)
+    _release_store()
+
+
 def clear_vectorstore(persist_directory: Path | None = None) -> None:
-    """Delete the persistent vector store directory (full rebuild)."""
+    """
+    Clear indexed data in a Windows-safe way.
+
+    Prefer deleting collection contents through the open Chroma client.
+    Folder deletion is only a last-resort fallback after releasing locks.
+    """
     path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
-    if path.exists():
-        shutil.rmtree(path)
-        logger.info("Cleared vector store at %s", path)
     path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        store = get_vectorstore(path)
+        _clear_collection_contents(store)
+        logger.info("Cleared Chroma collection contents at %s", path)
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("API clear failed, falling back to folder delete: %s", exc)
+
+    _release_store()
+    time.sleep(0.3)
+
+    if path.exists():
+        last_error: Exception | None = None
+        for attempt in range(5):
+            try:
+                shutil.rmtree(path)
+                last_error = None
+                break
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.4 * (attempt + 1))
+                _release_store()
+        if last_error is not None:
+            raise RuntimeError(
+                "לא ניתן לנקות את מאגר הווקטורים כי הקובץ תפוס "
+                "(כנראה על ידי חלון Streamlit נוסף). סגור/י כפילויות ונסה/י שוב. "
+                f"פרטים: {last_error}"
+            ) from last_error
+
+    path.mkdir(parents=True, exist_ok=True)
+    logger.info("Cleared vector store directory at %s", path)
 
 
 def index_documents(
@@ -73,16 +160,11 @@ def index_documents(
     """
     Embed and persist document chunks into ChromaDB.
 
-    Args:
-        chunks: Pre-split LangChain documents.
-        persist_directory: Override for the default ``data/vectorstore/``.
-        clear_existing: If True, wipe the store before indexing (clean sync).
-        progress_callback: Optional ``callable(message: str)`` for UI updates.
-
-    Returns:
-        The populated Chroma vector store.
+    Uses in-place collection clear (not folder delete) so Windows + Streamlit
+    do not hit WinError 32 on chroma.sqlite3.
     """
     path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
+    path.mkdir(parents=True, exist_ok=True)
 
     def _progress(msg: str) -> None:
         logger.info(msg)
@@ -99,27 +181,15 @@ def index_documents(
         _progress("מנקה את מאגר הווקטורים הקיים...")
         clear_vectorstore(path)
 
+    store = get_vectorstore(path)
     _progress(f"מטמיע ומאנדקס {len(chunks)} קטעים...")
-    embeddings = get_embeddings()
 
     batch_size = 64
-    store: Chroma | None = None
-
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
         end = min(start + batch_size, len(chunks))
         _progress(f"מאנדקס קטעים {start + 1}-{end} מתוך {len(chunks)}...")
+        store.add_documents(batch)
 
-        if store is None:
-            store = Chroma.from_documents(
-                documents=batch,
-                embedding=embeddings,
-                collection_name=COLLECTION_NAME,
-                persist_directory=str(path),
-            )
-        else:
-            store.add_documents(batch)
-
-    assert store is not None
     _progress(f"האינדוקס הושלם - {get_chunk_count(path)} קטעים נשמרו.")
     return store
