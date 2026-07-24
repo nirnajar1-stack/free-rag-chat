@@ -70,8 +70,8 @@ def validate_groq_api_key() -> str:
     key = _secret("GROQ_API_KEY") or GROQ_API_KEY
     if not key or not key.strip():
         raise ValueError(
-            "GROQ_API_KEY is not set. For local use: copy .env.example to .env. "
-            "For Streamlit Cloud / HF Spaces: add GROQ_API_KEY in app secrets. "
-            "Get a free key at https://console.groq.com/keys"
+            "חסר מפתח GROQ_API_KEY. מקומית: העתק/י .env.example ל-.env. "
+            "ב-Streamlit Cloud / HF Spaces: הוסף/י GROQ_API_KEY בסודות האפליקציה. "
+            "מפתח חינמי: https://console.groq.com/keys"
         )
     return key.strip()

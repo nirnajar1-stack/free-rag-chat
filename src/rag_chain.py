@@ -1,4 +1,4 @@
-"""RAG question-answering chain powered by Groq + Chroma retrieval."""
+"""שרשרת שאלות ותשובות מבוססת RAG עם Groq ושליפה מ-Chroma."""
 
 from __future__ import annotations
 
@@ -14,36 +14,39 @@ from langchain_groq import ChatGroq
 from src.config import GROQ_MODEL_NAME, RETRIEVER_K, validate_groq_api_key
 from src.vectorstore import get_chunk_count, get_retriever
 
-SYSTEM_PROMPT = """You are a careful document Q&A assistant for a RAG system.
+SYSTEM_PROMPT = """את/ה עוזר/ת לשאלות ותשובות על מסמכים במערכת RAG.
+תמיד ענה בעברית ברורה וטבעית, אלא אם המשתמש ביקש במפורש שפה אחרת.
 
-Rules you MUST follow:
-1. Answer ONLY using the information in the Context below. Do not use outside knowledge.
-2. If the Context does not contain enough information to answer, reply exactly with:
-   "I could not find this information in the indexed documents."
-3. When you use information from the Context, cite the source document name(s)
-   in parentheses, e.g. (source: report.pdf).
-4. Be concise and accurate. Prefer quoting or closely paraphrasing the Context.
-5. If multiple sources conflict, mention the conflict and cite each source.
+כללים שחובה לעקוב אחריהם:
+1. ענה אך ורק על סמך המידע ב"הקשר" למטה. אל תשתמש בידע חיצוני.
+2. אם אין ב"הקשר" מספיק מידע כדי לענות, השב בדיוק:
+   "לא מצאתי את המידע הזה במסמכים שבאינדקס."
+3. כשאת/ה משתמש/ת במידע מההקשר, ציין/י את שם קובץ המקור בסוגריים,
+   למשל (מקור: report.pdf).
+4. היה/י תמציתי/ת ומדויק/ת. העדף/י ציטוט או ניסוח קרוב להקשר.
+5. אם מקורות סותרים זה את זה, ציין/י את הסתירה ואת המקורות.
 
-Context:
+הקשר:
 {context}
 """
+
+NOT_FOUND_HE = "לא מצאתי את המידע הזה במסמכים שבאינדקס."
 
 
 @dataclass
 class RAGResponse:
-    """Structured answer plus the retrieved source chunks."""
+    """תשובה מובנית יחד עם קטעי המקור שנשלפו."""
 
     answer: str
     sources: list[Document] = field(default_factory=list)
 
     @property
     def source_files(self) -> list[str]:
-        """Unique source filenames, preserving retrieval order."""
+        """שמות קבצי מקור ייחודיים לפי סדר השליפה."""
         seen: set[str] = set()
         ordered: list[str] = []
         for doc in self.sources:
-            name = doc.metadata.get("source_file") or doc.metadata.get("source", "unknown")
+            name = doc.metadata.get("source_file") or doc.metadata.get("source", "לא ידוע")
             name = Path(str(name)).name
             if name not in seen:
                 seen.add(name)
@@ -52,26 +55,26 @@ class RAGResponse:
 
 
 def _format_context(docs: list[Document]) -> str:
-    """Format retrieved chunks for the system prompt."""
+    """עיצוב קטעים שנשלפו עבור ה-prompt."""
     if not docs:
-        return "(No relevant documents were retrieved.)"
+        return "(לא נשלפו מסמכים רלוונטיים.)"
 
     parts: list[str] = []
     for i, doc in enumerate(docs, start=1):
         name = doc.metadata.get("source_file") or Path(
-            str(doc.metadata.get("source", "unknown"))
+            str(doc.metadata.get("source", "לא ידוע"))
         ).name
         page = doc.metadata.get("page")
-        header = f"[Snippet {i} | source: {name}"
+        header = f"[קטע {i} | מקור: {name}"
         if page is not None:
-            header += f" | page: {int(page) + 1}"
+            header += f" | עמוד: {int(page) + 1}"
         header += "]"
         parts.append(f"{header}\n{doc.page_content.strip()}")
     return "\n\n---\n\n".join(parts)
 
 
 def get_llm() -> ChatGroq:
-    """Create a ChatGroq client using the free Groq API."""
+    """יצירת לקוח ChatGroq."""
     api_key = validate_groq_api_key()
     return ChatGroq(
         model=GROQ_MODEL_NAME,
@@ -86,7 +89,7 @@ def _build_messages(
     context: str,
     chat_history: list[dict[str, Any]] | None,
 ) -> list[Any]:
-    """Build the message list: system (with context) + optional history + question."""
+    """בניית הודעות: מערכת + היסטוריה אופציונלית + שאלה."""
     system = SystemMessage(content=SYSTEM_PROMPT.format(context=context))
 
     if not chat_history:
@@ -118,24 +121,19 @@ def ask_question(
     k: int = RETRIEVER_K,
     chat_history: list[dict[str, Any]] | None = None,
 ) -> RAGResponse:
-    """
-    Retrieve relevant chunks and generate a grounded answer via Groq.
-
-    ``chat_history`` is optional prior turns (role/content dicts) for light
-    conversational continuity; answers remain grounded in retrieved context.
-    """
+    """שליפת קטעים רלוונטיים ותשובה מבוססת-הקשר דרך Groq."""
     if get_chunk_count() == 0:
         return RAGResponse(
             answer=(
-                "The vector database is empty. Use **Re-index / Sync Documents** "
-                "in the sidebar to load files from your docs folder first."
+                "מאגר הווקטורים ריק. העלה/י מסמכים בסרגל הצד ולחץ/י על "
+                "**סנכרון / בניית אינדקס**."
             ),
             sources=[],
         )
 
     question = (question or "").strip()
     if not question:
-        return RAGResponse(answer="Please enter a question.", sources=[])
+        return RAGResponse(answer="נא להזין שאלה.", sources=[])
 
     retriever = get_retriever(k=k)
     sources: list[Document] = list(retriever.invoke(question))
@@ -151,8 +149,7 @@ def ask_question(
     )
 
     if not sources:
-        not_found = "I could not find this information in the indexed documents."
-        if not_found.lower() not in answer.lower():
-            answer = not_found
+        if NOT_FOUND_HE not in answer and "could not find" not in answer.lower():
+            answer = NOT_FOUND_HE
 
     return RAGResponse(answer=answer.strip(), sources=sources)

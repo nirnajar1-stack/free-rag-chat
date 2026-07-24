@@ -1,4 +1,4 @@
-"""Re-index / sync documents from DOCS_FOLDER_PATH into ChromaDB."""
+"""סנכרון מחדש של מסמכים מ-DOCS_FOLDER_PATH ל-ChromaDB."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IndexResult:
-    """Summary of a re-index / sync run."""
+    """סיכום הרצת סנכרון / בניית אינדקס."""
 
     docs_folder: Path
     source_file_count: int
@@ -31,11 +31,7 @@ def reindex_documents(
     *,
     progress_callback: Callable[[str], None] | None = None,
 ) -> IndexResult:
-    """
-    Full sync: load → split → clear Chroma → embed → persist.
-
-    Designed for Google Drive / local folders pointed at by ``DOCS_FOLDER_PATH``.
-    """
+    """סנכרון מלא: טעינה -> פיצול -> ניקוי Chroma -> הטמעה -> שמירה."""
     docs_path = Path(folder) if folder is not None else DOCS_FOLDER_PATH
 
     def _progress(msg: str) -> None:
@@ -46,10 +42,10 @@ def reindex_documents(
     try:
         file_counts = count_source_files(docs_path)
         _progress(
-            f"Scanning {docs_path} - found {file_counts['total']} supported file(s)..."
+            f"סורק את {docs_path} - נמצאו {file_counts['total']} קבצים נתמכים..."
         )
 
-        _progress("Loading documents (PDF, TXT, Markdown)...")
+        _progress("טוען מסמכים (PDF, TXT, Markdown)...")
         documents = load_documents(docs_path)
 
         if not documents:
@@ -60,12 +56,12 @@ def reindex_documents(
                 chunk_count=get_chunk_count(),
                 success=False,
                 message=(
-                    f"No readable content found in {docs_path}. "
-                    "Add .pdf, .txt, or .md files and try again."
+                    f"לא נמצא תוכן קריא ב-{docs_path}. "
+                    "הוסף/י קבצי .pdf, .txt או .md ונסה/י שוב."
                 ),
             )
 
-        _progress(f"Splitting {len(documents)} loaded document page(s) into chunks...")
+        _progress(f"מפצל {len(documents)} עמודים לקטעים...")
         chunks = split_documents(documents)
 
         index_documents(
@@ -76,8 +72,8 @@ def reindex_documents(
 
         final_count = get_chunk_count()
         message = (
-            f"Synced {file_counts['total']} file(s) -> "
-            f"{len(documents)} page(s) -> {final_count} chunk(s) indexed."
+            f"סונכרנו {file_counts['total']} קבצים -> "
+            f"{len(documents)} עמודים -> {final_count} קטעים באינדקס."
         )
         _progress(message)
 
@@ -97,5 +93,5 @@ def reindex_documents(
             document_count=0,
             chunk_count=get_chunk_count(),
             success=False,
-            message=f"Re-index failed: {exc}",
+            message=f"הסנכרון נכשל: {exc}",
         )

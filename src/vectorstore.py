@@ -91,15 +91,15 @@ def index_documents(
 
     if not chunks:
         raise ValueError(
-            "No document chunks to index. Add PDF, TXT, or Markdown files "
-            "to your DOCS_FOLDER_PATH and try again."
+            "אין קטעים לאינדקס. הוסף/י קבצי PDF, TXT או Markdown "
+            "לתיקיית המסמכים ונסה/י שוב."
         )
 
     if clear_existing:
-        _progress("Clearing existing vector store...")
+        _progress("מנקה את מאגר הווקטורים הקיים...")
         clear_vectorstore(path)
 
-    _progress(f"Embedding and indexing {len(chunks)} chunk(s)...")
+    _progress(f"מטמיע ומאנדקס {len(chunks)} קטעים...")
     embeddings = get_embeddings()
 
     batch_size = 64
@@ -108,7 +108,7 @@ def index_documents(
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
         end = min(start + batch_size, len(chunks))
-        _progress(f"Indexing chunks {start + 1}-{end} of {len(chunks)}...")
+        _progress(f"מאנדקס קטעים {start + 1}-{end} מתוך {len(chunks)}...")
 
         if store is None:
             store = Chroma.from_documents(
@@ -121,5 +121,5 @@ def index_documents(
             store.add_documents(batch)
 
     assert store is not None
-    _progress(f"Indexing complete - {get_chunk_count(path)} chunk(s) stored.")
+    _progress(f"האינדוקס הושלם - {get_chunk_count(path)} קטעים נשמרו.")
     return store
