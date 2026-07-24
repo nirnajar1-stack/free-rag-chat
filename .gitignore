@@ -1,0 +1,31 @@
+# Environment & secrets
+.env
+.venv/
+venv/
+env/
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Vector store & local data (keep sample docs if you add any under data/docs)
+data/vectorstore/
+!data/docs/
+!data/docs/.gitkeep
+
+# Model / HuggingFace caches (optional local overrides)
+.cache/
+models/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

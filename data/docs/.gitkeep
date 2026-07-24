@@ -1,0 +1,2 @@
+# Keep this folder so DOCS_FOLDER_PATH=data/docs works out of the box.
+# Drop PDF, TXT, or Markdown files here (or point DOCS_FOLDER_PATH at your Google Drive sync folder).
