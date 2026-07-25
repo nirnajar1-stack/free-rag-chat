@@ -17,6 +17,9 @@ __pycache__/
 # Vector store & local data (keep sample docs if you add any under data/docs)
 data/vectorstore/
 data/app_settings.json
+data/drive_sync_state.json
+secrets/**
+!secrets/.gitkeep
 !data/docs/
 !data/docs/.gitkeep
 

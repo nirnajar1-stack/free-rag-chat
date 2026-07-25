@@ -36,6 +36,9 @@ def _bootstrap_streamlit_secrets() -> None:
         "GROQ_API_KEY",
         "DOCS_FOLDER_PATH",
         "VECTORSTORE_PATH",
+        "GOOGLE_DRIVE_FOLDER_ID",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
         "GROQ_MODEL_NAME",
         "EMBEDDING_MODEL_NAME",
         "CHUNK_SIZE",
@@ -49,7 +52,12 @@ def _bootstrap_streamlit_secrets() -> None:
             value = secrets.get(key) if hasattr(secrets, "get") else secrets[key]
         except Exception:
             continue
-        if value is not None and str(value).strip() and not os.getenv(key):
+        if value is None:
+            continue
+        # Skip nested TOML tables (handled by google_drive._credentials_info)
+        if not isinstance(value, (str, int, float, bool)):
+            continue
+        if str(value).strip() and not os.getenv(key):
             os.environ[key] = str(value).strip()
 
 
@@ -57,6 +65,13 @@ _bootstrap_streamlit_secrets()
 
 from src.config import EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME
 from src.document_loader import count_source_files
+from src.drive_sync import sync_drive_and_reindex_if_needed, upload_many_to_drive_and_reindex
+from src.google_drive import (
+    get_drive_folder_id,
+    get_service_account_email,
+    is_drive_configured,
+    save_drive_folder_id,
+)
 from src.indexer import reindex_documents
 from src.rag_chain import ask_question
 from src.storage import (
@@ -112,6 +127,8 @@ def _init_session() -> None:
         st.session_state.last_index_message = None
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
+    if "drive_auto_synced" not in st.session_state:
+        st.session_state.drive_auto_synced = False
 
 
 _init_session()
@@ -143,60 +160,126 @@ def _run_reindex() -> None:
         st.session_state.last_index_message = result.message
 
 
+def _run_drive_sync(*, force: bool = False) -> None:
+    status = st.empty()
+    progress = st.progress(0, text="מתחבר ל-Google Drive...")
+    steps = {"n": 0}
+
+    def on_progress(msg: str) -> None:
+        steps["n"] += 1
+        pct = min(95, 10 + steps["n"] * 8)
+        progress.progress(pct, text=msg)
+        status.info(msg)
+
+    with st.spinner("מסנכרן מ-Google Drive בענן..."):
+        result = sync_drive_and_reindex_if_needed(
+            force_reindex=force,
+            progress_callback=on_progress,
+        )
+
+    progress.progress(100, text="הושלם")
+    if result.reindexed or result.synced:
+        status.success(result.message)
+    else:
+        status.warning(result.message)
+    st.session_state.last_index_message = result.message
+    if result.reindexed:
+        st.cache_resource.clear()
+        st.rerun()
+
+
+# Auto-sync from Drive cloud once per session when configured
+if is_drive_configured() and not st.session_state.drive_auto_synced:
+    st.session_state.drive_auto_synced = True
+    try:
+        auto = sync_drive_and_reindex_if_needed(force_reindex=False)
+        if auto.reindexed:
+            st.session_state.last_index_message = auto.message
+            st.cache_resource.clear()
+        elif auto.message:
+            st.session_state.last_index_message = auto.message
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.last_index_message = f"סנכרון Drive אוטומטי נכשל: {exc}"
+
+
 with st.sidebar:
     st.title("📚 צ'אט מסמכים")
     st.caption("LangChain · Groq · HuggingFace · ChromaDB")
 
     st.divider()
-    st.subheader("Google Drive / תיקיית אחסון")
+    st.subheader("Google Drive בענן")
     st.caption(
-        "הגדר/י תיקייה מסונכרנת של Google Drive for desktop. "
-        "המסמכים והאינדקס (Chroma) יישמרו שם."
+        "בלי להתקין Drive על המחשב: העלאה ישירות לתיקייה בענן, "
+        "ואינדוקס אוטומטי כשנוספים שם קבצים. מדריך: SETUP_GOOGLE_DRIVE.md"
     )
 
-    current_docs = get_docs_folder()
-    drive_path_input = st.text_input(
-        "נתיב תיקייה",
-        value=str(current_docs),
-        placeholder=r"G:\My Drive\RAG_Docs",
-        help=r"לדוגמה: G:\My Drive\RAG_Docs",
-        key="drive_path_input",
+    folder_id_value = get_drive_folder_id() or ""
+    folder_id_input = st.text_input(
+        "Drive Folder ID",
+        value=folder_id_value,
+        placeholder="הדבק מתוך כתובת התיקייה ב-drive.google.com",
+        key="drive_folder_id_input",
     )
+    if st.button("💾 שמור Folder ID", use_container_width=True):
+        if folder_id_input.strip():
+            save_drive_folder_id(folder_id_input.strip())
+            st.session_state.drive_auto_synced = False
+            st.success("Folder ID נשמר")
+            st.rerun()
+        else:
+            st.error("נא להזין Folder ID")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("💾 שמור נתיב", use_container_width=True):
-            try:
-                new_path = save_docs_folder(drive_path_input)
+    if is_drive_configured():
+        st.success("Drive בענן מחובר")
+        email = get_service_account_email()
+        if email:
+            st.caption(f"Service Account: `{email}`")
+        st.caption(f"Folder ID: `{get_drive_folder_id()}`")
+        if st.button("☁️ סנכרן מ-Drive עכשיו", use_container_width=True):
+            _run_drive_sync(force=False)
+        if st.button("☁️ סנכרן + אינדוקס מלא", use_container_width=True):
+            _run_drive_sync(force=True)
+    else:
+        st.warning(
+            "עדיין לא מוגדר. צריך Service Account + שיתוף תיקייה. "
+            "ראה SETUP_GOOGLE_DRIVE.md"
+        )
+
+    with st.expander("נתיב מקומי / Drive for desktop (אופציונלי)"):
+        st.caption("רק אם יש לך Google Drive מותקן על המחשב.")
+        current_docs = get_docs_folder()
+        drive_path_input = st.text_input(
+            "נתיב תיקייה מקומית",
+            value=str(current_docs),
+            placeholder=r"G:\My Drive\RAG_Docs",
+            key="drive_path_input",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("שמור נתיב מקומי", use_container_width=True):
+                try:
+                    save_docs_folder(drive_path_input)
+                    ensure_storage_dirs()
+                    _release_store()
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+        with c2:
+            if st.button("איפוס ל-data/docs", use_container_width=True):
+                save_docs_folder(_ROOT / "data" / "docs")
                 ensure_storage_dirs()
                 _release_store()
-                st.success(f"נשמר: {new_path}")
                 st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"לא ניתן לשמור את הנתיב: {exc}")
-    with col_b:
-        if st.button("📁 ברירת מחדל מקומית", use_container_width=True):
-            save_docs_folder(_ROOT / "data" / "docs")
-            ensure_storage_dirs()
-            _release_store()
-            st.rerun()
-
-    info = describe_storage()
-    if info["on_google_drive"]:
-        st.success("מצב אחסון: Google Drive")
-    else:
-        st.info("מצב אחסון: מקומי (בפרויקט)")
-
-    if not info["docs_exists"]:
-        st.warning("התיקייה עדיין לא קיימת — תיווצר בשמירה/סנכרון אם יש הרשאות.")
-
-    st.caption(f"מסמכים: `{info['docs_folder']}`")
-    st.caption(f"ChromaDB: `{info['vectorstore']}`")
-    st.caption("ב-Streamlit Cloud אין גישה ל-Drive של המחשב — שם האחסון נשאר מקומי בענן.")
+        info = describe_storage()
+        st.caption(f"מסמכים מקומיים: `{info['docs_folder']}`")
+        st.caption(f"Chroma: `{info['vectorstore']}`")
 
     st.divider()
     st.subheader("העלאת מסמכים")
-    st.caption("PDF, TXT או Markdown — נשמרים בתיקיית האחסון ואז נכנסים לאינדקס.")
+    if is_drive_configured():
+        st.caption("הקבצים יועלו ל-Google Drive בענן, יסונכרנו, ויאנדקסו אוטומטית.")
+    else:
+        st.caption("PDF / TXT / MD — נשמרים מקומית ואז נכנסים לאינדקס.")
 
     uploaded = st.file_uploader(
         "בחר/י קבצים",
@@ -206,26 +289,56 @@ with st.sidebar:
         help="אפשר להעלות כמה קבצים יחד",
     )
 
+    upload_label = (
+        "☁️ העלה ל-Drive וסנכרן"
+        if is_drive_configured()
+        else "💾 שמור וסנכרן לאינדקס"
+    )
     if st.button(
-        "💾 שמור וסנכרן לאינדקס",
+        upload_label,
         type="primary",
         use_container_width=True,
         disabled=not uploaded,
     ):
-        ensure_storage_dirs()
-        saved, errors = save_uploaded_files(uploaded)
-        if saved:
-            st.success("נשמרו: " + ", ".join(saved))
-        for err in errors:
-            st.error(err)
-        if saved:
-            st.session_state.uploader_key += 1
-            _run_reindex()
+        if is_drive_configured():
+            status = st.empty()
+            progress = st.progress(0, text="מעלה ל-Drive...")
+            steps = {"n": 0}
+
+            def on_progress(msg: str) -> None:
+                steps["n"] += 1
+                progress.progress(min(95, 10 + steps["n"] * 8), text=msg)
+                status.info(msg)
+
+            files = [(f.name, f.getvalue()) for f in uploaded]
+            with st.spinner("מעלה ל-Google Drive ובונה אינדקס..."):
+                result = upload_many_to_drive_and_reindex(
+                    files, progress_callback=on_progress
+                )
+            progress.progress(100, text="הושלם")
+            if result.reindexed:
+                status.success(result.message)
+                st.session_state.last_index_message = result.message
+                st.session_state.uploader_key += 1
+                st.cache_resource.clear()
+                st.rerun()
+            else:
+                status.error(result.message)
+                st.session_state.last_index_message = result.message
+        else:
+            ensure_storage_dirs()
+            saved, errors = save_uploaded_files(uploaded)
+            if saved:
+                st.success("נשמרו: " + ", ".join(saved))
+            for err in errors:
+                st.error(err)
+            if saved:
+                st.session_state.uploader_key += 1
+                _run_reindex()
 
     st.divider()
-    st.subheader("מסמכים")
-    docs_folder = get_docs_folder()
-    st.code(str(docs_folder), language=None)
+    st.subheader("מסמכים מקומיים (עותק לסנכרון)")
+    st.code(str(get_docs_folder()), language=None)
 
     file_counts = count_source_files()
     st.markdown(
@@ -251,10 +364,8 @@ with st.sidebar:
     st.caption(f"נתיב שמירה: `{get_vectorstore_path()}`")
 
     st.divider()
-    st.subheader("סנכרון")
-    st.caption(
-        "טוען את כל קבצי PDF / TXT / Markdown מתיקיית האחסון ובונה מחדש את האינדקס."
-    )
+    st.subheader("סנכרון מקומי")
+    st.caption("בונה מחדש את האינדקס מהעותק המקומי בלבד.")
 
     if st.button("🔄 סנכרון / בניית אינדקס", use_container_width=True):
         ensure_storage_dirs()
