@@ -35,6 +35,7 @@ def _bootstrap_streamlit_secrets() -> None:
     for key in (
         "GROQ_API_KEY",
         "DOCS_FOLDER_PATH",
+        "VECTORSTORE_PATH",
         "GROQ_MODEL_NAME",
         "EMBEDDING_MODEL_NAME",
         "CHUNK_SIZE",
@@ -54,12 +55,19 @@ def _bootstrap_streamlit_secrets() -> None:
 
 _bootstrap_streamlit_secrets()
 
-from src.config import DOCS_FOLDER_PATH, EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME, VECTORSTORE_PATH
+from src.config import EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME
 from src.document_loader import count_source_files
 from src.indexer import reindex_documents
 from src.rag_chain import ask_question
+from src.storage import (
+    describe_storage,
+    ensure_storage_dirs,
+    get_docs_folder,
+    get_vectorstore_path,
+    save_docs_folder,
+)
 from src.uploads import save_uploaded_files
-from src.vectorstore import get_chunk_count
+from src.vectorstore import _release_store, get_chunk_count
 
 st.markdown(
     """
@@ -140,8 +148,55 @@ with st.sidebar:
     st.caption("LangChain · Groq · HuggingFace · ChromaDB")
 
     st.divider()
+    st.subheader("Google Drive / תיקיית אחסון")
+    st.caption(
+        "הגדר/י תיקייה מסונכרנת של Google Drive for desktop. "
+        "המסמכים והאינדקס (Chroma) יישמרו שם."
+    )
+
+    current_docs = get_docs_folder()
+    drive_path_input = st.text_input(
+        "נתיב תיקייה",
+        value=str(current_docs),
+        placeholder=r"G:\My Drive\RAG_Docs",
+        help=r"לדוגמה: G:\My Drive\RAG_Docs",
+        key="drive_path_input",
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("💾 שמור נתיב", use_container_width=True):
+            try:
+                new_path = save_docs_folder(drive_path_input)
+                ensure_storage_dirs()
+                _release_store()
+                st.success(f"נשמר: {new_path}")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"לא ניתן לשמור את הנתיב: {exc}")
+    with col_b:
+        if st.button("📁 ברירת מחדל מקומית", use_container_width=True):
+            save_docs_folder(_ROOT / "data" / "docs")
+            ensure_storage_dirs()
+            _release_store()
+            st.rerun()
+
+    info = describe_storage()
+    if info["on_google_drive"]:
+        st.success("מצב אחסון: Google Drive")
+    else:
+        st.info("מצב אחסון: מקומי (בפרויקט)")
+
+    if not info["docs_exists"]:
+        st.warning("התיקייה עדיין לא קיימת — תיווצר בשמירה/סנכרון אם יש הרשאות.")
+
+    st.caption(f"מסמכים: `{info['docs_folder']}`")
+    st.caption(f"ChromaDB: `{info['vectorstore']}`")
+    st.caption("ב-Streamlit Cloud אין גישה ל-Drive של המחשב — שם האחסון נשאר מקומי בענן.")
+
+    st.divider()
     st.subheader("העלאת מסמכים")
-    st.caption("PDF, TXT או Markdown — נשמרים בתיקיית המסמכים ואז נכנסים לאינדקס.")
+    st.caption("PDF, TXT או Markdown — נשמרים בתיקיית האחסון ואז נכנסים לאינדקס.")
 
     uploaded = st.file_uploader(
         "בחר/י קבצים",
@@ -157,6 +212,7 @@ with st.sidebar:
         use_container_width=True,
         disabled=not uploaded,
     ):
+        ensure_storage_dirs()
         saved, errors = save_uploaded_files(uploaded)
         if saved:
             st.success("נשמרו: " + ", ".join(saved))
@@ -168,7 +224,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader("מסמכים")
-    st.code(str(DOCS_FOLDER_PATH), language=None)
+    docs_folder = get_docs_folder()
+    st.code(str(docs_folder), language=None)
 
     file_counts = count_source_files()
     st.markdown(
@@ -191,15 +248,16 @@ with st.sidebar:
         f'<span class="status-pill {pill_class}">{label}</span>',
         unsafe_allow_html=True,
     )
-    st.caption(f"נתיב שמירה: `{VECTORSTORE_PATH}`")
+    st.caption(f"נתיב שמירה: `{get_vectorstore_path()}`")
 
     st.divider()
     st.subheader("סנכרון")
     st.caption(
-        "טוען את כל קבצי PDF / TXT / Markdown מתיקיית המסמכים ובונה מחדש את האינדקס."
+        "טוען את כל קבצי PDF / TXT / Markdown מתיקיית האחסון ובונה מחדש את האינדקס."
     )
 
     if st.button("🔄 סנכרון / בניית אינדקס", use_container_width=True):
+        ensure_storage_dirs()
         _run_reindex()
 
     if st.session_state.last_index_message:
@@ -226,7 +284,7 @@ st.markdown(
 if chunk_count == 0:
     st.warning(
         "מאגר הווקטורים ריק. העלה/י מסמכים בסרגל הצד "
-        f"או הוסף/י קבצים ל-`{DOCS_FOLDER_PATH}`, ואז לחץ/י על "
+        f"או הוסף/י קבצים ל-`{get_docs_folder()}`, ואז לחץ/י על "
         "**סנכרון / בניית אינדקס**."
     )
 

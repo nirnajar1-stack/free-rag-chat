@@ -39,13 +39,30 @@ def _secret(key: str, default: str | None = None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths (defaults — prefer src.storage.get_docs_folder / get_vectorstore_path)
 # ---------------------------------------------------------------------------
 PROJECT_ROOT: Path = _PROJECT_ROOT
+
+
+def get_docs_folder_path() -> Path:
+    from src.storage import get_docs_folder
+
+    return get_docs_folder()
+
+
+def get_vectorstore_dir() -> Path:
+    from src.storage import get_vectorstore_path
+
+    return get_vectorstore_path()
+
+
+# Back-compat aliases (evaluated at import; UI may change paths later via storage)
 DOCS_FOLDER_PATH: Path = Path(
     _secret("DOCS_FOLDER_PATH", str(_PROJECT_ROOT / "data" / "docs"))
 ).expanduser()
-VECTORSTORE_PATH: Path = _PROJECT_ROOT / "data" / "vectorstore"
+VECTORSTORE_PATH: Path = Path(
+    _secret("VECTORSTORE_PATH", str(_PROJECT_ROOT / "data" / "vectorstore"))
+).expanduser()
 
 # ---------------------------------------------------------------------------
 # Models

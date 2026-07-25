@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from src.config import DOCS_FOLDER_PATH, SUPPORTED_EXTENSIONS
+from src.config import SUPPORTED_EXTENSIONS
+from src.storage import get_docs_folder
 
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -31,7 +32,7 @@ def save_uploaded_files(
     Returns:
         (saved_names, skipped_or_error_messages)
     """
-    dest = Path(destination) if destination is not None else DOCS_FOLDER_PATH
+    dest = Path(destination) if destination is not None else get_docs_folder()
     dest.mkdir(parents=True, exist_ok=True)
 
     saved: list[str] = []

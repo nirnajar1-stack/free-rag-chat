@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.config import DOCS_FOLDER_PATH
+from src.storage import get_docs_folder
 from src.document_loader import count_source_files, load_documents, split_documents
 from src.vectorstore import get_chunk_count, index_documents
 
@@ -32,7 +32,7 @@ def reindex_documents(
     progress_callback: Callable[[str], None] | None = None,
 ) -> IndexResult:
     """סנכרון מלא: טעינה -> פיצול -> ניקוי Chroma -> הטמעה -> שמירה."""
-    docs_path = Path(folder) if folder is not None else DOCS_FOLDER_PATH
+    docs_path = Path(folder) if folder is not None else get_docs_folder()
 
     def _progress(msg: str) -> None:
         logger.info(msg)

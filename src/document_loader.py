@@ -12,9 +12,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from src.config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
-    DOCS_FOLDER_PATH,
     SUPPORTED_EXTENSIONS,
 )
+from src.storage import get_docs_folder
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +61,12 @@ def load_documents(folder: Path | None = None) -> list[Document]:
 
     Supports PDF, TXT, and Markdown (``.md`` / ``.markdown``).
     """
-    docs_path = Path(folder) if folder is not None else DOCS_FOLDER_PATH
+    docs_path = Path(folder) if folder is not None else get_docs_folder()
 
     if not docs_path.exists():
         raise FileNotFoundError(
             f"Documents folder not found: {docs_path}\n"
-            "Set DOCS_FOLDER_PATH in .env to your Google Drive sync folder "
+            "Set a Google Drive folder in the sidebar, or DOCS_FOLDER_PATH in .env, "
             "or create data/docs/ and add PDF/TXT/MD files."
         )
 
@@ -137,7 +137,7 @@ def split_documents(
 
 def count_source_files(folder: Path | None = None) -> dict[str, int]:
     """Count supported files in the docs folder by extension."""
-    docs_path = Path(folder) if folder is not None else DOCS_FOLDER_PATH
+    docs_path = Path(folder) if folder is not None else get_docs_folder()
     counts: dict[str, int] = {ext: 0 for ext in SUPPORTED_EXTENSIONS}
     counts["total"] = 0
 

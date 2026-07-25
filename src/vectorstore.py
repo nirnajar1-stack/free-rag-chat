@@ -13,8 +13,9 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
 
-from src.config import RETRIEVER_K, VECTORSTORE_PATH
+from src.config import RETRIEVER_K
 from src.embeddings import get_embeddings
+from src.storage import get_vectorstore_path
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def get_vectorstore(persist_directory: Path | None = None) -> Chroma:
     """Open (or reuse) the persistent Chroma vector store."""
     global _store, _store_path
 
-    path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
+    path = Path(persist_directory) if persist_directory else get_vectorstore_path()
     path.mkdir(parents=True, exist_ok=True)
     path_str = str(path.resolve())
 
@@ -121,7 +122,7 @@ def retrieve_relevant_documents(
 
 def get_chunk_count(persist_directory: Path | None = None) -> int:
     """Return the number of indexed chunks, or 0 if the store is empty/missing."""
-    path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
+    path = Path(persist_directory) if persist_directory else get_vectorstore_path()
     if not path.exists():
         return 0
     try:
@@ -168,7 +169,7 @@ def clear_vectorstore(persist_directory: Path | None = None) -> None:
     Prefer deleting collection contents through the open Chroma client.
     Folder deletion is only a last-resort fallback after releasing locks.
     """
-    path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
+    path = Path(persist_directory) if persist_directory else get_vectorstore_path()
     path.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -217,7 +218,7 @@ def index_documents(
     Uses in-place collection clear (not folder delete) so Windows + Streamlit
     do not hit WinError 32 on chroma.sqlite3.
     """
-    path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH
+    path = Path(persist_directory) if persist_directory else get_vectorstore_path()
     path.mkdir(parents=True, exist_ok=True)
 
     def _progress(msg: str) -> None:
