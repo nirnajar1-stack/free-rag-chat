@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,19 +17,46 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.config import DOCS_FOLDER_PATH, EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME, VECTORSTORE_PATH
-from src.document_loader import count_source_files
-from src.indexer import reindex_documents
-from src.rag_chain import ask_question
-from src.uploads import save_uploaded_files
-from src.vectorstore import get_chunk_count
-
 st.set_page_config(
     page_title="צ'אט מסמכים | RAG",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _bootstrap_streamlit_secrets() -> None:
+    """Copy Streamlit Cloud secrets into env vars before the rest of the app loads."""
+    try:
+        secrets = st.secrets
+    except Exception:
+        return
+
+    for key in (
+        "GROQ_API_KEY",
+        "DOCS_FOLDER_PATH",
+        "GROQ_MODEL_NAME",
+        "EMBEDDING_MODEL_NAME",
+        "CHUNK_SIZE",
+        "CHUNK_OVERLAP",
+        "RETRIEVER_K",
+    ):
+        try:
+            value = secrets.get(key) if hasattr(secrets, "get") else secrets[key]
+        except Exception:
+            continue
+        if value is not None and str(value).strip() and not os.getenv(key):
+            os.environ[key] = str(value).strip()
+
+
+_bootstrap_streamlit_secrets()
+
+from src.config import DOCS_FOLDER_PATH, EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME, VECTORSTORE_PATH
+from src.document_loader import count_source_files
+from src.indexer import reindex_documents
+from src.rag_chain import ask_question
+from src.uploads import save_uploaded_files
+from src.vectorstore import get_chunk_count
 
 st.markdown(
     """

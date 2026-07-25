@@ -16,15 +16,22 @@ def _secret(key: str, default: str | None = None) -> str | None:
     """Read from env first, then Streamlit Cloud / local secrets.toml."""
     value = os.getenv(key)
     if value is not None and str(value).strip() != "":
-        return str(value)
+        return str(value).strip()
 
     try:
         import streamlit as st
 
-        if hasattr(st, "secrets") and key in st.secrets:
-            secret_val = st.secrets[key]
-            if secret_val is not None and str(secret_val).strip() != "":
-                return str(secret_val)
+        secrets = st.secrets
+        secret_val = None
+        try:
+            secret_val = secrets[key]
+        except Exception:
+            try:
+                secret_val = secrets.get(key)  # type: ignore[attr-defined]
+            except Exception:
+                secret_val = None
+        if secret_val is not None and str(secret_val).strip() != "":
+            return str(secret_val).strip()
     except Exception:  # noqa: BLE001 — secrets unavailable outside Streamlit
         pass
 
