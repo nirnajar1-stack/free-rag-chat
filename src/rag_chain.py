@@ -83,7 +83,7 @@ def _format_context(docs: list[Document]) -> str:
 
 def _filter_sources_for_display(answer: str, sources: list[Document]) -> list[Document]:
     """
-    Keep sources that were actually cited, otherwise the top-scoring ones only.
+    Prefer sources cited in the answer; otherwise keep the ranked retrieval list.
     Deduplicate near-identical chunks from the same file.
     """
     if not sources:
@@ -125,8 +125,6 @@ def _build_messages(
     chat_history: list[dict[str, Any]] | None,
 ) -> list[Any]:
     """בניית הודעות: מערכת + היסטוריה אופציונלית + שאלה."""
-    system = SystemMessage(content=SYSTEM_PROMPT.format(context=context))
-
     if not chat_history:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -136,7 +134,7 @@ def _build_messages(
         )
         return prompt.format_messages(context=context, question=question)
 
-    messages: list[Any] = [system]
+    messages: list[Any] = [SystemMessage(content=SYSTEM_PROMPT.format(context=context))]
     for turn in chat_history[-6:]:
         role = turn.get("role", "user")
         content = (turn.get("content") or "").strip()
@@ -184,11 +182,11 @@ def ask_question(
         response.content
         if isinstance(response.content, str)
         else str(response.content)
-    )
+    ).strip()
 
+    # Only force "not found" when retrieval itself returned nothing.
     if not sources:
-        if NOT_FOUND_HE not in answer and "could not find" not in answer.lower():
-            answer = NOT_FOUND_HE
+        answer = NOT_FOUND_HE
 
-    display_sources = _filter_sources_for_display(answer.strip(), sources)
-    return RAGResponse(answer=answer.strip(), sources=display_sources)
+    display_sources = _filter_sources_for_display(answer, sources)
+    return RAGResponse(answer=answer, sources=display_sources)

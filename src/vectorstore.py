@@ -69,57 +69,52 @@ def retrieve_relevant_documents(
     query: str,
     *,
     fetch_k: int = 8,
-    min_score: float = 0.28,
-    max_docs: int = 3,
+    min_score: float = 0.0,
+    max_docs: int = 4,
     persist_directory: Path | None = None,
 ) -> list[Document]:
     """
-    Retrieve chunks with relevance filtering.
+    Retrieve the strongest matching chunks.
 
-    Uses relevance scores (higher = better), drops weak matches, keeps only
-    chunks close to the best score, and caps how many are returned.
+    Uses Chroma distances (lower = better). Avoids LangChain "relevance scores"
+    which can be negative/invalid with this embedding setup and caused empty
+    retrieval for Hebrew queries.
     """
+    del min_score  # kept for API compatibility; distance ranking is primary
     store = get_vectorstore(persist_directory)
+
     try:
-        scored = store.similarity_search_with_relevance_scores(query, k=fetch_k)
+        scored = store.similarity_search_with_score(query, k=fetch_k)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("relevance search failed (%s); falling back to plain search", exc)
+        logger.warning("scored search failed (%s); falling back to plain search", exc)
         docs = store.similarity_search(query, k=max_docs)
         for doc in docs:
             doc.metadata["relevance"] = None
         return docs
 
-    usable: list[tuple[Document, float]] = []
-    for doc, score in scored:
-        if score is None:
-            continue
-        try:
-            score_f = float(score)
-        except (TypeError, ValueError):
-            continue
-        # Some backends invert scores; clamp into a usable range.
-        if score_f < 0:
-            continue
-        usable.append((doc, score_f))
-
-    if not usable:
+    if not scored:
         return []
 
-    usable.sort(key=lambda item: item[1], reverse=True)
-    best = usable[0][1]
+    # Distance: lower is better
+    scored.sort(key=lambda item: float(item[1]))
+    best_distance = float(scored[0][1])
 
-    # Keep only reasonably strong matches near the top hit.
+    # Keep neighbors close to the best hit (absolute margin on distance).
+    margin = 0.45
     filtered = [
-        (doc, score)
-        for doc, score in usable
-        if score >= min_score and score >= (best - 0.18)
+        (doc, float(dist))
+        for doc, dist in scored
+        if float(dist) <= best_distance + margin
     ]
     if not filtered:
-        filtered = [usable[0]]
+        filtered = [scored[0]]
 
     selected: list[Document] = []
-    for doc, score in filtered[:max_docs]:
-        doc.metadata["relevance"] = round(score, 3)
+    for doc, dist in filtered[:max_docs]:
+        # Convert distance to a rough 0-1 display score (not used for filtering).
+        approx = max(0.0, min(1.0, 1.0 / (1.0 + dist)))
+        doc.metadata["relevance"] = round(approx, 3)
+        doc.metadata["distance"] = round(dist, 4)
         selected.append(doc)
     return selected
 
