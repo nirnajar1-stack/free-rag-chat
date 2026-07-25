@@ -65,6 +65,65 @@ def get_retriever(
     return store.as_retriever(search_type="similarity", search_kwargs={"k": k})
 
 
+def retrieve_relevant_documents(
+    query: str,
+    *,
+    fetch_k: int = 8,
+    min_score: float = 0.28,
+    max_docs: int = 3,
+    persist_directory: Path | None = None,
+) -> list[Document]:
+    """
+    Retrieve chunks with relevance filtering.
+
+    Uses relevance scores (higher = better), drops weak matches, keeps only
+    chunks close to the best score, and caps how many are returned.
+    """
+    store = get_vectorstore(persist_directory)
+    try:
+        scored = store.similarity_search_with_relevance_scores(query, k=fetch_k)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("relevance search failed (%s); falling back to plain search", exc)
+        docs = store.similarity_search(query, k=max_docs)
+        for doc in docs:
+            doc.metadata["relevance"] = None
+        return docs
+
+    usable: list[tuple[Document, float]] = []
+    for doc, score in scored:
+        if score is None:
+            continue
+        try:
+            score_f = float(score)
+        except (TypeError, ValueError):
+            continue
+        # Some backends invert scores; clamp into a usable range.
+        if score_f < 0:
+            continue
+        usable.append((doc, score_f))
+
+    if not usable:
+        return []
+
+    usable.sort(key=lambda item: item[1], reverse=True)
+    best = usable[0][1]
+
+    # Keep only reasonably strong matches near the top hit.
+    filtered = [
+        (doc, score)
+        for doc, score in usable
+        if score >= min_score and score >= (best - 0.18)
+    ]
+    if not filtered:
+        filtered = [usable[0]]
+
+    selected: list[Document] = []
+    for doc, score in filtered[:max_docs]:
+        doc.metadata["relevance"] = round(score, 3)
+        selected.append(doc)
+    return selected
+
+
 def get_chunk_count(persist_directory: Path | None = None) -> int:
     """Return the number of indexed chunks, or 0 if the store is empty/missing."""
     path = Path(persist_directory) if persist_directory else VECTORSTORE_PATH

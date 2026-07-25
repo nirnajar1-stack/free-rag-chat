@@ -64,6 +64,10 @@ GROQ_API_KEY: str | None = _secret("GROQ_API_KEY")
 CHUNK_SIZE: int = int(_secret("CHUNK_SIZE", "1000") or "1000")
 CHUNK_OVERLAP: int = int(_secret("CHUNK_OVERLAP", "200") or "200")
 RETRIEVER_K: int = int(_secret("RETRIEVER_K", "4") or "4")
+# Minimum relevance (0-1) to keep a retrieved chunk; relative gap keeps near-best only.
+RETRIEVER_MIN_SCORE: float = float(_secret("RETRIEVER_MIN_SCORE", "0.28") or "0.28")
+RETRIEVER_MAX_SOURCES: int = int(_secret("RETRIEVER_MAX_SOURCES", "3") or "3")
+RETRIEVER_FETCH_K: int = int(_secret("RETRIEVER_FETCH_K", "8") or "8")
 
 # ---------------------------------------------------------------------------
 # Supported document extensions

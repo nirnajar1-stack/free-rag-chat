@@ -40,6 +40,9 @@ def _bootstrap_streamlit_secrets() -> None:
         "CHUNK_SIZE",
         "CHUNK_OVERLAP",
         "RETRIEVER_K",
+        "RETRIEVER_MIN_SCORE",
+        "RETRIEVER_MAX_SOURCES",
+        "RETRIEVER_FETCH_K",
     ):
         try:
             value = secrets.get(key) if hasattr(secrets, "get") else secrets[key]
@@ -217,7 +220,7 @@ with st.sidebar:
 st.title("שאל/י את המסמכים שלך")
 st.markdown(
     "התשובות מבוססות רק על הקבצים שבאינדקס. "
-    "מתחת לכל תשובה יופיעו המקורות והקטעים ששימשו."
+    "מתחת לכל תשובה יופיעו המקורות הרלוונטיים בלבד."
 )
 
 if chunk_count == 0:
@@ -227,24 +230,51 @@ if chunk_count == 0:
         "**סנכרון / בניית אינדקס**."
     )
 
+
+def _preview_text(text: str, limit: int = 260) -> str:
+    clean = " ".join((text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1].rstrip() + "…"
+
+
+def _render_sources(sources: list[dict], source_files: list[str] | None = None) -> None:
+    if not sources:
+        return
+
+    grouped: dict[str, list[dict]] = {}
+    for src in sources:
+        name = src.get("source_file", "לא ידוע")
+        grouped.setdefault(name, []).append(src)
+
+    files = source_files or list(grouped.keys())
+    with st.expander(f"📄 מקורות רלוונטיים ({len(files)})", expanded=False):
+        for file_name in files:
+            chunks = grouped.get(file_name) or []
+            if not chunks:
+                continue
+            st.markdown(f"**{file_name}**")
+            for i, src in enumerate(chunks, start=1):
+                page = src.get("page")
+                relevance = src.get("relevance")
+                meta_parts: list[str] = []
+                if page is not None:
+                    meta_parts.append(f"עמוד {int(page) + 1}")
+                if relevance is not None:
+                    meta_parts.append(f"התאמה {float(relevance):.0%}")
+                caption = f"קטע {i}"
+                if meta_parts:
+                    caption += " · " + " · ".join(meta_parts)
+                st.caption(caption)
+                st.markdown(f"> {_preview_text(src.get('content', ''))}")
+            st.divider()
+
+
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message["role"] == "assistant" and message.get("sources"):
-            with st.expander("📄 מקורות וקטעים שנשלפו", expanded=False):
-                files = message.get("source_files") or []
-                if files:
-                    st.markdown("**קבצים בשימוש:** " + ", ".join(f"`{f}`" for f in files))
-                for i, src in enumerate(message["sources"], start=1):
-                    name = src.get("source_file", "לא ידוע")
-                    page = src.get("page")
-                    header = f"**קטע {i}** — `{name}`"
-                    if page is not None:
-                        header += f" (עמוד {int(page) + 1})"
-                    st.markdown(header)
-                    st.text(src.get("content", ""))
-                    if i < len(message["sources"]):
-                        st.divider()
+            _render_sources(message["sources"], message.get("source_files"))
 
 
 def _serialize_sources(docs) -> list[dict]:
@@ -255,6 +285,7 @@ def _serialize_sources(docs) -> list[dict]:
                 "source_file": doc.metadata.get("source_file")
                 or Path(str(doc.metadata.get("source", "לא ידוע"))).name,
                 "page": doc.metadata.get("page"),
+                "relevance": doc.metadata.get("relevance"),
                 "content": doc.page_content.strip(),
             }
         )
@@ -288,23 +319,7 @@ if prompt := st.chat_input("כתוב/י שאלה על המסמכים..."):
                 result_files = result.source_files
 
         st.markdown(result_answer)
-
-        if result_sources:
-            with st.expander("📄 מקורות וקטעים שנשלפו", expanded=False):
-                if result_files:
-                    st.markdown(
-                        "**קבצים בשימוש:** " + ", ".join(f"`{f}`" for f in result_files)
-                    )
-                for i, src in enumerate(result_sources, start=1):
-                    name = src.get("source_file", "לא ידוע")
-                    page = src.get("page")
-                    header = f"**קטע {i}** — `{name}`"
-                    if page is not None:
-                        header += f" (עמוד {int(page) + 1})"
-                    st.markdown(header)
-                    st.text(src.get("content", ""))
-                    if i < len(result_sources):
-                        st.divider()
+        _render_sources(result_sources, result_files)
 
     st.session_state.messages.append(
         {

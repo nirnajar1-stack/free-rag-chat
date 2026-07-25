@@ -11,8 +11,14 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 
-from src.config import GROQ_MODEL_NAME, RETRIEVER_K, validate_groq_api_key
-from src.vectorstore import get_chunk_count, get_retriever
+from src.config import (
+    GROQ_MODEL_NAME,
+    RETRIEVER_FETCH_K,
+    RETRIEVER_MAX_SOURCES,
+    RETRIEVER_MIN_SCORE,
+    validate_groq_api_key,
+)
+from src.vectorstore import get_chunk_count, retrieve_relevant_documents
 
 SYSTEM_PROMPT = """את/ה עוזר/ת לשאלות ותשובות על מסמכים במערכת RAG.
 תמיד ענה בעברית ברורה וטבעית, אלא אם המשתמש ביקש במפורש שפה אחרת.
@@ -21,8 +27,8 @@ SYSTEM_PROMPT = """את/ה עוזר/ת לשאלות ותשובות על מסמכ
 1. ענה אך ורק על סמך המידע ב"הקשר" למטה. אל תשתמש בידע חיצוני.
 2. אם אין ב"הקשר" מספיק מידע כדי לענות, השב בדיוק:
    "לא מצאתי את המידע הזה במסמכים שבאינדקס."
-3. כשאת/ה משתמש/ת במידע מההקשר, ציין/י את שם קובץ המקור בסוגריים,
-   למשל (מקור: report.pdf).
+3. כשאת/ה משתמש/ת במידע מההקשר, ציין/י רק את שם הקובץ שבאמת שימש אותך,
+   למשל (מקור: report.pdf). אל תציין קבצים שלא תרמו לתשובה.
 4. היה/י תמציתי/ת ומדויק/ת. העדף/י ציטוט או ניסוח קרוב להקשר.
 5. אם מקורות סותרים זה את זה, ציין/י את הסתירה ואת המקורות.
 
@@ -46,12 +52,16 @@ class RAGResponse:
         seen: set[str] = set()
         ordered: list[str] = []
         for doc in self.sources:
-            name = doc.metadata.get("source_file") or doc.metadata.get("source", "לא ידוע")
-            name = Path(str(name)).name
+            name = _source_name(doc)
             if name not in seen:
                 seen.add(name)
                 ordered.append(name)
         return ordered
+
+
+def _source_name(doc: Document) -> str:
+    name = doc.metadata.get("source_file") or doc.metadata.get("source", "לא ידוע")
+    return Path(str(name)).name
 
 
 def _format_context(docs: list[Document]) -> str:
@@ -61,9 +71,7 @@ def _format_context(docs: list[Document]) -> str:
 
     parts: list[str] = []
     for i, doc in enumerate(docs, start=1):
-        name = doc.metadata.get("source_file") or Path(
-            str(doc.metadata.get("source", "לא ידוע"))
-        ).name
+        name = _source_name(doc)
         page = doc.metadata.get("page")
         header = f"[קטע {i} | מקור: {name}"
         if page is not None:
@@ -71,6 +79,33 @@ def _format_context(docs: list[Document]) -> str:
         header += "]"
         parts.append(f"{header}\n{doc.page_content.strip()}")
     return "\n\n---\n\n".join(parts)
+
+
+def _filter_sources_for_display(answer: str, sources: list[Document]) -> list[Document]:
+    """
+    Keep sources that were actually cited, otherwise the top-scoring ones only.
+    Deduplicate near-identical chunks from the same file.
+    """
+    if not sources:
+        return []
+
+    cited = [doc for doc in sources if _source_name(doc) in answer]
+    pool = cited if cited else sources
+
+    selected: list[Document] = []
+    seen_keys: set[str] = set()
+    for doc in pool:
+        name = _source_name(doc)
+        page = doc.metadata.get("page")
+        preview = " ".join(doc.page_content.split())[:120]
+        key = f"{name}|{page}|{preview}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        selected.append(doc)
+        if len(selected) >= RETRIEVER_MAX_SOURCES:
+            break
+    return selected
 
 
 def get_llm() -> ChatGroq:
@@ -118,7 +153,6 @@ def _build_messages(
 def ask_question(
     question: str,
     *,
-    k: int = RETRIEVER_K,
     chat_history: list[dict[str, Any]] | None = None,
 ) -> RAGResponse:
     """שליפת קטעים רלוונטיים ותשובה מבוססת-הקשר דרך Groq."""
@@ -135,8 +169,12 @@ def ask_question(
     if not question:
         return RAGResponse(answer="נא להזין שאלה.", sources=[])
 
-    retriever = get_retriever(k=k)
-    sources: list[Document] = list(retriever.invoke(question))
+    sources = retrieve_relevant_documents(
+        question,
+        fetch_k=RETRIEVER_FETCH_K,
+        min_score=RETRIEVER_MIN_SCORE,
+        max_docs=RETRIEVER_MAX_SOURCES,
+    )
     context = _format_context(sources)
 
     llm = get_llm()
@@ -152,4 +190,5 @@ def ask_question(
         if NOT_FOUND_HE not in answer and "could not find" not in answer.lower():
             answer = NOT_FOUND_HE
 
-    return RAGResponse(answer=answer.strip(), sources=sources)
+    display_sources = _filter_sources_for_display(answer.strip(), sources)
+    return RAGResponse(answer=answer.strip(), sources=display_sources)
